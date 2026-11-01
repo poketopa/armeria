@@ -36,6 +36,7 @@ import com.linecorp.armeria.common.HttpHeaderNames;
 import com.linecorp.armeria.common.HttpMethod;
 import com.linecorp.armeria.common.HttpRequest;
 import com.linecorp.armeria.common.HttpStatus;
+import com.linecorp.armeria.common.QueryParams;
 import com.linecorp.armeria.common.RequestHeaders;
 import com.linecorp.armeria.common.RequestId;
 import com.linecorp.armeria.common.ResponseHeaders;
@@ -201,20 +202,44 @@ class TextLogFormatterTest {
                 .contains(":path=/search?token=token-6&page=1");
     }
 
+    @Test
+    void queryParamMaskingFunctionCanEncodeQueryParams() {
+        final LogFormatter logFormatter = LogFormatter.builderForText()
+                                                      .maskQueryParams("token")
+                                                      .queryParamMaskingFunction(
+                                                              (name, value) -> QueryParams.of("x", "y")
+                                                                                          .toQueryString())
+                                                      .build();
+        final ServiceRequestContext ctx =
+                ServiceRequestContext.of(HttpRequest.of(HttpMethod.GET, "/"));
+        final DefaultRequestLog log = new DefaultRequestLog(ctx);
+        log.requestHeaders(RequestHeaders.of(
+                HttpMethod.GET, "/search?page=1&token=secret#fragment"));
+        log.endRequest();
+
+        assertThat(logFormatter.formatRequest(log))
+                .contains(":path=/search?page=1&token=x%3Dy#fragment]")
+                .doesNotContain("secret");
+    }
+
     @ParameterizedTest
     @CsvSource({
             "/search?token=abcdef, /search",
             "/search?token=abcdef&page=1, /search?page=1",
-            "/search?page=1&token=abcdef&sort=asc, /search?page=1&sort=asc"
+            "/search?page=1&token=abcdef&sort=asc, /search?page=1&sort=asc",
+            "/search?page=1&token=abcdef, /search?page=1",
+            "/search?token=abcdef#fragment, /search#fragment",
+            "/search?token=abcdef&page=1#fragment, /search?page=1#fragment"
     })
     void removeQueryParamWhenMaskingFunctionReturnsNull(String path, String maskedPath) {
         final LogFormatter logFormatter = LogFormatter.builderForText()
                                                       .maskQueryParams("token")
                                                       .queryParamMaskingFunction((name, value) -> null)
                                                       .build();
-        final ServiceRequestContext ctx = ServiceRequestContext.of(
-                HttpRequest.of(HttpMethod.GET, path));
-        final DefaultRequestLog log = (DefaultRequestLog) ctx.log();
+        final ServiceRequestContext ctx =
+                ServiceRequestContext.of(HttpRequest.of(HttpMethod.GET, "/"));
+        final DefaultRequestLog log = new DefaultRequestLog(ctx);
+        log.requestHeaders(RequestHeaders.of(HttpMethod.GET, path));
         log.endRequest();
 
         assertThat(logFormatter.formatRequest(log))
